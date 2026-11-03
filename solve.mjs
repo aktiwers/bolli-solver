@@ -4,36 +4,36 @@
 // end of the script's closure (before its last "}).call(this);"), where it sets self.__bolliN.
 //
 // Each run first checks what YouTube's TV page uses and yt-dlp's latest solver release, and stops if that is done
-// already (or failed less than RETRY_MS ago). Else it runs the solver as it is (here, in Node), takes the n code it
-// adds to the player script, turns that into ES5 (Babel, plus polyfills.js) and checks it before writing it: it parses
-// as ES5, and in the player script, run as an old TV's worker would (without the newer built-ins), it gives the
-// solver's own answers. A check that fails writes nothing and fails the run, so the last good one stays.
+// already. Else it runs the solver as it is (here, in Node), takes the n code it adds to the player script, turns that
+// into ES5 (Babel, plus polyfills.js) and checks it before writing it: it parses as ES5, and in the player script, run
+// as a TV's worker would (an old TV's, without the newer built-ins, for a player script made for old TVs), it gives
+// the solver's own answers. A failure is noted in state.json and fails the run once; that script is tried again with
+// the next solver release (or --force). Network failures only warn: the next run tries again.
 //
 //   npm run solve                 check, and prepare what changed
 //   npm run solve -- --check      only check: prints what changed (needs no packages installed)
 //   npm run solve -- --force      prepare again even if nothing changed
-// FOUND (comma-separated player script paths) adds to those YouTube's TV page names now: what --check found, as
-// the page may name another version when asked again
+// FOUND (comma-separated player script paths) and TAG (the solver release) hand what --check found to the run that
+// prepares it, as YouTube's TV page may name another version when asked again.
 // (YouTube's TV page sends long headers: package.json raises Node's limit)
 
 import fs from 'node:fs';
 import path from 'node:path';
 import vm from 'node:vm';
 
-const ROOT = path.dirname(new URL(import.meta.url).pathname);
+const ROOT = import.meta.dirname;
 const STATE = path.join(ROOT, 'state.json');
 const PLAYERS = path.join(ROOT, 'players');
 /** Player scripts kept (the newest) */
 const KEPT = 20;
-/** A player script whose preparation failed is tried again after this long, or as soon as the solver changes */
-const RETRY_MS = 6 * 3600 * 1000;
 /** The TV browsers YouTube's TV page is asked as: a 2017 LG TV, and a newer one */
 const AGENTS = [
     'LG Browser/8.00.00 (webOS.TV-2017), _TV_O18/06.00.25 (LG, OLED55C7V-Z, wired)',
     'Mozilla/5.0 (Web0S; Linux/SmartTV) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36 WebAppManager'
 ];
-/** Times each is asked per run: YouTube serves a few player script versions at once while it rolls one out */
-const ASKS = 3;
+/** A TV player script as YouTube's TV page names it: /s/player/<id>/tv-player….vflset/<name>.js */
+const PLAYER_PATH = /\/s\/player\/([\w-]+)\/tv-player[\w-]*\.vflset\/([\w-]+)\.js/;
+const WHOLE_PATH = new RegExp('^' + PLAYER_PATH.source + '$');
 /** n values the converted code must answer as the solver does */
 const CHALLENGES = ['abcdefghijklmnopqrst', 'zyxwvutsrqponmlkjihg', 'Q2xpY2tCYWl0X1Rlc3Q', 'r2D2-c3P0_bb8xy', 'AAAAAAAAAAAAAAAAAAAA'];
 /** Where the code goes in the player script: before its closure's end */
@@ -43,48 +43,50 @@ const STUB = 'var window=self,top=self,parent=self;self.document={createElement:
     'appendChild:function(){},getContext:function(){return null}}},documentElement:{style:{}},addEventListener:function(){},' +
     'getElementsByTagName:function(){return[]},querySelector:function(){return null},cookie:"",location:self.location,body:null,head:null};' +
     'var document=self.document;\n';
-/** Built-ins old TVs (Chrome 38) lack: removed before the code runs in the check */
-const TYPED = 'Object.getPrototypeOf(Uint8Array.prototype).';
+/** Built-ins old TVs (Chrome 38) lack: removed before the code runs in a player script made for old TVs */
 const NEWER = ['globalThis', 'Reflect', 'Proxy', 'WeakRef', 'FinalizationRegistry', 'queueMicrotask', 'structuredClone',
     'Array.from', 'Array.of', 'Object.assign', 'Object.entries', 'Object.values', 'Object.fromEntries',
     'Object.getOwnPropertyDescriptors', 'Object.hasOwn', 'String.fromCodePoint', 'String.raw',
-    'Promise.prototype.finally', 'Promise.allSettled', 'Promise.any',
-    'Object.getPrototypeOf(Uint8Array).from', 'Object.getPrototypeOf(Uint8Array).of']
+    'Promise.prototype.finally', 'Promise.allSettled', 'Promise.any']
     .concat(['find', 'findIndex', 'findLast', 'findLastIndex', 'fill', 'copyWithin', 'includes', 'flat', 'flatMap', 'at',
         'values'].map((m) => 'Array.prototype.' + m))
     .concat(['includes', 'startsWith', 'endsWith', 'repeat', 'codePointAt', 'padStart', 'padEnd', 'trimStart', 'trimEnd',
-        'matchAll', 'replaceAll', 'at'].map((m) => 'String.prototype.' + m))
-    .concat(['slice', 'fill', 'indexOf', 'lastIndexOf', 'includes', 'join', 'map', 'forEach', 'filter', 'reduce',
-        'reduceRight', 'every', 'some', 'find', 'findIndex', 'reverse', 'sort', 'copyWithin', 'at'].map((m) => TYPED + m));
+        'matchAll', 'replaceAll', 'at'].map((m) => 'String.prototype.' + m));
 
 const force = process.argv.includes('--force');
 const checkOnly = process.argv.includes('--check');
 
+/** A failure the next run may not meet: no network, or a busy server */
+class Passing extends Error {}
+
 async function get(url, init) {
     const r = await fetch(url, init).catch((e) => {
-        throw new Error(url + ': ' + (e.cause && (e.cause.code || e.cause.message) || e.message));
+        throw new Passing(url + ': ' + (e.cause && (e.cause.code || e.cause.message) || e.message));
     });
     if (!r.ok) {
-        throw new Error(url + ': ' + r.status);
+        throw new (r.status >= 500 || r.status === 429 ? Passing : Error)(url + ': ' + r.status);
     }
     return r;
 }
 
-/** The player scripts YouTube's TV page loads (their paths, e.g. /s/player/<id>/tv-player-ias.vflset/tv-player-ias.js) */
+/** Hands a value to the workflow's next steps */
+function output(name, value) {
+    if (process.env.GITHUB_OUTPUT) {
+        fs.appendFileSync(process.env.GITHUB_OUTPUT, name + '=' + String(value).replace(/\n/g, ' ') + '\n');
+    }
+}
+
+/** The player scripts YouTube's TV page loads (their paths) */
 async function players() {
-    const found = new Set();
-    const asks = AGENTS.flatMap((agent) => Array(ASKS).fill(agent));
-    await Promise.all(asks.map(async (agent) => {
+    const found = await Promise.all(AGENTS.map(async (agent) => {
         const html = await (await get('https://www.youtube.com/tv', { headers: { 'User-Agent': agent } })).text();
-        const m = PLAYER_PATH.exec(html);
-        if (m) {
-            found.add(m[0]);
-        }
+        return (PLAYER_PATH.exec(html) || [])[0];
     }));
-    if (!found.size) {
+    const paths = [...new Set(found.filter(Boolean))];
+    if (!paths.length) {
         throw new Error('YouTube\'s TV page names no TV player script');
     }
-    return [...found];
+    return paths;
 }
 
 /** yt-dlp's latest solver release */
@@ -93,20 +95,19 @@ async function latestSolver() {
     return (await (await get('https://api.github.com/repos/yt-dlp/ejs/releases/latest', { headers })).json()).tag_name;
 }
 
-const PLAYER_PATH = /\/s\/player\/[\w-]+\/tv-player[\w-]*\.vflset\/[\w-]+\.js/;
-
-/** Where a player script's code goes: players/<id>/<name>.js */
+/** Where a player script's code goes: <id>/<name>.js in players/ */
 function fileOf(playerPath) {
-    const m = /\/s\/player\/([\w-]+)\/[\w-]+\.vflset\/([\w-]+)\.js$/.exec(playerPath);
-    return path.join(m[1], m[2] + '.js');
+    const m = WHOLE_PATH.exec(playerPath);
+    return m[1] + '/' + m[2] + '.js';
 }
 
 /** The solver of a release, as a function of its input */
 async function solver(tag) {
     const asset = async (name) => (await get('https://github.com/yt-dlp/ejs/releases/download/' + tag + '/' + name)).text();
+    const [lib, core] = await Promise.all([asset('yt.solver.lib.min.js'), asset('yt.solver.core.js')]);
     const ctx = vm.createContext({ console });
-    vm.runInContext(await asset('yt.solver.lib.min.js') + '\nthis.meriyah = lib.meriyah; this.astring = lib.astring;', ctx);
-    vm.runInContext(await asset('yt.solver.core.js') + '\nthis.jsc = jsc;', ctx);
+    vm.runInContext(lib + '\nthis.meriyah = lib.meriyah; this.astring = lib.astring;', ctx);
+    vm.runInContext(core + '\nthis.jsc = jsc;', ctx);
     return ctx.jsc;
 }
 
@@ -137,14 +138,14 @@ function convert(babel, statement, made) {
     return '/* ' + made + ' */\n' + fs.readFileSync(path.join(ROOT, 'polyfills.js'), 'utf8') + es5 + '\n';
 }
 
-/** A context like a TV's worker, without the built-ins old TVs lack */
-function oldWorker() {
+/** A context like a TV's worker (an old TV's: without the built-ins old TVs lack) */
+function worker(old) {
     function XMLHttpRequest() {}
     XMLHttpRequest.prototype.open = function () {};
     XMLHttpRequest.prototype.send = function () {};
     const ctx = vm.createContext({
         console, URL, Blob, TextEncoder, TextDecoder, atob, btoa, XMLHttpRequest,
-        navigator: { userAgent: AGENTS[0] },
+        navigator: { userAgent: AGENTS[old ? 0 : 1] },
         location: { href: 'https://www.youtube.com/tv', protocol: 'https:', host: 'www.youtube.com', hostname: 'www.youtube.com',
             origin: 'https://www.youtube.com', pathname: '/tv', search: '', hash: '' },
         setTimeout: () => 0, clearTimeout() {}, setInterval: () => 0, clearInterval() {},
@@ -152,22 +153,28 @@ function oldWorker() {
         performance: { now: () => 0, timing: {} }
     });
     ctx.self = ctx;
-    vm.runInContext(NEWER.map((name) => 'delete ' + name + ';').join('\n'), ctx);
+    if (old) {
+        vm.runInContext(NEWER.map((name) => 'delete ' + name + ';').join('\n'), ctx);
+    }
     return ctx;
 }
 
-/** Throws unless the code parses as ES5 and, in the player script run as an old TV's worker would, answers as
- * expected */
+/** Throws unless the code parses as ES5 and, in the player script run as a TV's worker would, answers as expected */
 function check(acorn, player, code, expected) {
     acorn.parse(code, { ecmaVersion: 5 });
     const end = player.lastIndexOf(END);
     if (end < 0) {
         throw new Error('the player script does not end with ' + END);
     }
-    const whole = player.slice(0, end) + ';' + code + player.slice(end);
-    acorn.parse(whole, { ecmaVersion: 5 });
-    const ctx = oldWorker();
-    vm.runInContext(STUB + whole, ctx);
+    // A player script that is ES5 itself is made for old TVs
+    let old = true;
+    try {
+        acorn.parse(player, { ecmaVersion: 5 });
+    } catch (e) {
+        old = false;
+    }
+    const ctx = worker(old);
+    vm.runInContext(STUB + player.slice(0, end) + ';' + code + player.slice(end), ctx);
     if (typeof ctx.__bolliN !== 'function') {
         throw new Error('no n transform set');
     }
@@ -179,8 +186,8 @@ function check(acorn, player, code, expected) {
     }
 }
 
-/** Prepares one player script with the solver: writes its code and notes it in state */
-async function prepare(p, tag, solve, state) {
+/** Prepares one player script with the solver: writes its code, returns its state entry */
+async function prepare(p, tag, solve) {
     const [{ default: babel }, acorn] = await Promise.all([import('@babel/core'), import('acorn')]);
     const player = await (await get('https://www.youtube.com' + p)).text();
     const solved = solve({ type: 'player', player, output_preprocessed: true, requests: [{ type: 'n', challenges: CHALLENGES }] });
@@ -191,73 +198,63 @@ async function prepare(p, tag, solve, state) {
     const code = convert(babel, nStatement(acorn, solved.preprocessed_player), 'For YouTube\'s ' + p + ': its n transform as yt-dlp\'s solver ' +
         tag + ' computes it (github.com/yt-dlp/ejs, Unlicense), made ES5 by github.com/aktiwers/bolli-solver');
     check(acorn, player, code, answer.data);
-    const file = fileOf(p);
-    fs.mkdirSync(path.dirname(path.join(PLAYERS, file)), { recursive: true });
-    fs.writeFileSync(path.join(PLAYERS, file), code);
-    state.players[p] = { solver: tag, file: 'players/' + file, at: new Date().toISOString() };
-    delete state.failed[p];
-    console.log('Prepared ' + p + ' with ' + tag + ': players/' + file + ' (' + code.length + ' bytes)');
+    const file = path.join(PLAYERS, fileOf(p));
+    fs.mkdirSync(path.dirname(file), { recursive: true });
+    fs.writeFileSync(file, code);
+    console.log('Prepared ' + p + ' with ' + tag + ': players/' + fileOf(p) + ' (' + code.length + ' bytes)');
+    return { solver: tag, at: new Date().toISOString() };
 }
 
 async function main() {
-    const state = fs.existsSync(STATE) ? JSON.parse(fs.readFileSync(STATE, 'utf8')) : {};
-    state.players = state.players || {};
-    state.failed = state.failed || {};
-    let paths;
-    let tag;
-    try {
-        [paths, tag] = await Promise.all([players(), latestSolver()]);
-        const found = (process.env.FOUND || '').split(',').filter((p) => new RegExp('^' + PLAYER_PATH.source + '$').test(p));
-        paths = [...new Set(paths.concat(found))];
-    } catch (e) {
-        // Most often a passing network failure: the next run asks again
-        console.log('::warning::Could not check: ' + e.message);
+    const state = fs.existsSync(STATE) ? JSON.parse(fs.readFileSync(STATE, 'utf8')) : { players: {} };
+    let paths = (process.env.FOUND || '').split(',').filter((p) => WHOLE_PATH.test(p));
+    let tag = process.env.TAG;
+    if (!paths.length || !tag) {
+        try {
+            [paths, tag] = await Promise.all([players(), latestSolver()]);
+        } catch (e) {
+            // Most often a passing network failure: the next run asks again
+            console.log('::warning::Could not check: ' + e.message);
+            return;
+        }
+    }
+    const todo = paths.filter((p) => force || (state.players[p] || {}).solver !== tag);
+    output('todo', todo.length ? 'yes' : '');
+    output('found', paths.join(','));
+    output('tag', tag);
+    if (!todo.length || checkOnly) {
+        console.log((todo.length ? 'To prepare: ' + todo.join(', ') : 'Nothing to do: ' + paths.join(', ')) + ' (solver ' + tag + ')');
         return;
     }
-    const now = Date.now();
-    const todo = paths.filter((p) => {
-        const done = state.players[p];
-        const failed = state.failed[p];
-        return force || !(done && done.solver === tag) && !(failed && failed.solver === tag && now - Date.parse(failed.at) < RETRY_MS);
-    });
-    if (process.env.GITHUB_OUTPUT) {
-        fs.appendFileSync(process.env.GITHUB_OUTPUT, 'todo=' + (todo.length ? 'yes' : '') + '\nfound=' + paths.join(',') + '\n');
-    }
-    if (!todo.length) {
-        console.log('Nothing to do: ' + paths.join(', ') + ' with ' + tag);
-        return;
-    }
-    if (checkOnly) {
-        console.log('To prepare with ' + tag + ': ' + todo.join(', '));
-        return;
-    }
-    const solve = await solver(tag);
+    let solve;
     const failures = [];
     const told = [];
     for (const p of todo) {
         try {
-            await prepare(p, tag, solve, state);
+            solve = solve || await solver(tag);
+            state.players[p] = await prepare(p, tag, solve);
             told.push(fileOf(p));
         } catch (e) {
-            state.failed[p] = { solver: tag, at: new Date().toISOString(), error: String(e.message || e).slice(0, 500) };
-            failures.push(p + ': ' + state.failed[p].error);
+            if (e instanceof Passing) {
+                console.log('::warning::' + p + ': ' + e.message);
+                continue;
+            }
+            const error = String(e.message || e).slice(0, 500);
+            state.players[p] = { solver: tag, at: new Date().toISOString(), error };
+            failures.push(p + ': ' + error);
             told.push(fileOf(p) + ' failed');
         }
     }
-    if (process.env.GITHUB_OUTPUT) {
-        // The commit's message
-        fs.appendFileSync(process.env.GITHUB_OUTPUT, 'summary=' + told.join(', ') + ' (solver ' + tag + ')\n');
-    }
+    output('summary', told.join(', ') + ' (solver ' + tag + ')');
     // The newest KEPT stay
     const kept = Object.keys(state.players).sort((a, b) => state.players[b].at.localeCompare(state.players[a].at));
     for (const p of kept.slice(KEPT)) {
-        fs.rmSync(path.join(ROOT, state.players[p].file), { force: true });
+        fs.rmSync(path.join(PLAYERS, fileOf(p)), { force: true });
         delete state.players[p];
     }
-    state.solver = tag;
     fs.writeFileSync(STATE, JSON.stringify(state, null, 2) + '\n');
     if (failures.length) {
-        // Noted in state.json, so the runs after this one wait for a change instead of failing again
+        // Noted in state.json: the runs after this one leave that script until the solver changes
         console.error(failures.join('\n'));
         process.exitCode = 1;
     }
