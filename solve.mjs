@@ -6,10 +6,9 @@
 // Each run first checks what YouTube's TV page uses and yt-dlp's latest solver release, and stops if that is done
 // already. Else it runs the solver as it is (here, in Node), takes the n code it adds to the player script, turns that
 // into ES5 (Babel, plus polyfills.js) and checks it before writing it: it parses as ES5, and in the player script, run
-// as a TV's worker would (an old TV's, without the built-ins Chrome 38 lacks by MDN's browser data, for a player script
-// made for old TVs), it gives
-// the solver's own answers. A failure is noted in state.json and fails the run once; that script is tried again with
-// the next solver release (or --force). Network failures only warn: the next run tries again.
+// as a TV's worker would (for a player script made for old TVs, an old TV's: without the built-ins Chrome 38 lacks by
+// MDN's browser data), it gives the solver's own answers. A failure is noted in state.json and fails the run once; that
+// script is tried again with the next solver release (or --force). Network failures only warn: the next run tries again.
 //
 //   npm run solve                 check, and prepare what changed
 //   npm run solve -- --check      only check: prints what changed (needs no packages installed)
