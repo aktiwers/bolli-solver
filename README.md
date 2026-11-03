@@ -11,7 +11,7 @@ Nothing from YouTube is stored here, only the solver's code for each player scri
 ## Thanks
 
 - [yt-dlp/ejs](https://github.com/yt-dlp/ejs) (Unlicense): the solver.
-- [Babel](https://babeljs.io) and [acorn](https://github.com/acornjs/acorn): the conversion and the checks.
+- [Babel](https://babeljs.io), [acorn](https://github.com/acornjs/acorn) and [MDN's browser data](https://github.com/mdn/browser-compat-data): the conversion and the checks.
 
 ## License
 

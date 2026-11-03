@@ -6,7 +6,8 @@
 // Each run first checks what YouTube's TV page uses and yt-dlp's latest solver release, and stops if that is done
 // already. Else it runs the solver as it is (here, in Node), takes the n code it adds to the player script, turns that
 // into ES5 (Babel, plus polyfills.js) and checks it before writing it: it parses as ES5, and in the player script, run
-// as a TV's worker would (an old TV's, without the newer built-ins, for a player script made for old TVs), it gives
+// as a TV's worker would (an old TV's, without the built-ins Chrome 38 lacks by MDN's browser data, for a player script
+// made for old TVs), it gives
 // the solver's own answers. A failure is noted in state.json and fails the run once; that script is tried again with
 // the next solver release (or --force). Network failures only warn: the next run tries again.
 //
@@ -18,6 +19,7 @@
 // (YouTube's TV page sends long headers: package.json raises Node's limit)
 
 import fs from 'node:fs';
+import { createRequire } from 'node:module';
 import path from 'node:path';
 import vm from 'node:vm';
 
@@ -43,16 +45,6 @@ const STUB = 'var window=self,top=self,parent=self;self.document={createElement:
     'appendChild:function(){},getContext:function(){return null}}},documentElement:{style:{}},addEventListener:function(){},' +
     'getElementsByTagName:function(){return[]},querySelector:function(){return null},cookie:"",location:self.location,body:null,head:null};' +
     'var document=self.document;\n';
-/** Built-ins old TVs (Chrome 38) lack: removed before the code runs in a player script made for old TVs */
-const NEWER = ['globalThis', 'Reflect', 'Proxy', 'WeakRef', 'FinalizationRegistry', 'queueMicrotask', 'structuredClone',
-    'Array.from', 'Array.of', 'Object.assign', 'Object.entries', 'Object.values', 'Object.fromEntries',
-    'Object.getOwnPropertyDescriptors', 'Object.hasOwn', 'String.fromCodePoint', 'String.raw',
-    'Promise.prototype.finally', 'Promise.allSettled', 'Promise.any']
-    .concat(['find', 'findIndex', 'findLast', 'findLastIndex', 'fill', 'copyWithin', 'includes', 'flat', 'flatMap', 'at',
-        'values'].map((m) => 'Array.prototype.' + m))
-    .concat(['includes', 'startsWith', 'endsWith', 'repeat', 'codePointAt', 'padStart', 'padEnd', 'trimStart', 'trimEnd',
-        'matchAll', 'replaceAll', 'at'].map((m) => 'String.prototype.' + m));
-
 const force = process.argv.includes('--force');
 const checkOnly = process.argv.includes('--check');
 
@@ -111,19 +103,49 @@ async function solver(tag) {
     return ctx.jsc;
 }
 
-/** The statement the solver adds to the player script's closure to set _result.n */
+/** The statement the solver adds at the end of the player script's closure to set _result.n (only it is parsed) */
 function nStatement(acorn, prepared) {
-    const program = acorn.parse(prepared, { ecmaVersion: 'latest' });
-    const last = program.body[program.body.length - 1];
-    const call = last && last.type === 'ExpressionStatement' && last.expression.type === 'CallExpression' && last.expression;
-    const fn = call && (call.callee.type === 'MemberExpression' ? call.callee.object : call.callee);
-    const body = fn && fn.type === 'FunctionExpression' ? fn.body.body : [];
-    const found = body.find((s) => s.type === 'ExpressionStatement' && s.expression.type === 'AssignmentExpression' &&
-        prepared.slice(s.expression.left.start, s.expression.left.end) === '_result.n');
-    if (!found) {
-        throw new Error('the solver\'s prepared script has no _result.n');
+    const at = [...prepared.matchAll(/_result\.n\s*=/g)].pop();
+    const set = at && acorn.parseExpressionAt(prepared, at.index, { ecmaVersion: 'latest' });
+    if (!set || set.type !== 'AssignmentExpression') {
+        throw new Error('the solver\'s prepared script sets no _result.n');
     }
-    return prepared.slice(found.start, found.end);
+    return prepared.slice(set.start, set.end) + ';';
+}
+
+/** What old TVs (Chrome 38) lack of the JavaScript built-ins, from MDN's browser data, as expressions to delete */
+function newer() {
+    const builtins = createRequire(import.meta.url)('@mdn/browser-compat-data').javascript.builtins;
+    const missing = (entry) => {
+        const s = [].concat(entry.__compat.support.chrome)[0];
+        return !s || !!s.flags || s.version_added !== true && s.version_added !== null &&
+            !(parseFloat(String(s.version_added).replace('≤', '')) <= 38);
+    };
+    const out = [];
+    for (const [name, entry] of Object.entries(builtins)) {
+        const typed = name === 'TypedArray';
+        const at = typed ? 'Object.getPrototypeOf(Uint8Array)' : name;
+        const object = typed ? Object.getPrototypeOf(Uint8Array) : globalThis[name];
+        if (object === undefined || !entry.__compat) {
+            continue;
+        }
+        if (missing(entry)) {
+            out.push(name);
+            continue;
+        }
+        for (const [member, sub] of Object.entries(entry)) {
+            // Members only (not the entry's notes on behaviour, which are no properties)
+            if (!sub.__compat || !missing(sub)) {
+                continue;
+            }
+            if (typeof object === 'function' && object.prototype && member in object.prototype) {
+                out.push(at + '.prototype.' + member);
+            } else if (member in object) {
+                out.push(at + '.' + member);
+            }
+        }
+    }
+    return out;
 }
 
 /** The n statement as ES5 code that sets self.__bolliN, polyfills first */
@@ -154,7 +176,7 @@ function worker(old) {
     });
     ctx.self = ctx;
     if (old) {
-        vm.runInContext(NEWER.map((name) => 'delete ' + name + ';').join('\n'), ctx);
+        vm.runInContext(newer().map((name) => 'delete ' + name + ';').join('\n'), ctx);
     }
     return ctx;
 }
