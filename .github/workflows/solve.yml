@@ -48,11 +48,8 @@ jobs:
         run: |
           git add -A players state.json
           if git diff --cached --quiet; then exit 0; fi
-          changed=$(git diff --cached --name-only --diff-filter=AM -- players)
           git config user.name 'github-actions[bot]'
           git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
           git commit -q -m "${SUMMARY:-Prepared}"
           git pull -q --rebase
           git push -q
-          # The CDN fetches new files at once instead of answering from its cache
-          for f in $changed; do curl -fsS -o /dev/null "https://purge.jsdelivr.net/gh/${GITHUB_REPOSITORY}@main/$f" || true; done
