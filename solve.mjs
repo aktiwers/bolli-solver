@@ -12,6 +12,8 @@
 //   npm run solve                 check, and prepare what changed
 //   npm run solve -- --check      only check: prints what changed (needs no packages installed)
 //   npm run solve -- --force      prepare again even if nothing changed
+// FOUND (comma-separated player script paths) adds to those YouTube's TV page names now: what --check found, as
+// the page may name another version when asked again
 // (YouTube's TV page sends long headers: package.json raises Node's limit)
 
 import fs from 'node:fs';
@@ -74,7 +76,7 @@ async function players() {
     const asks = AGENTS.flatMap((agent) => Array(ASKS).fill(agent));
     await Promise.all(asks.map(async (agent) => {
         const html = await (await get('https://www.youtube.com/tv', { headers: { 'User-Agent': agent } })).text();
-        const m = /\/s\/player\/[\w-]+\/tv-player[\w-]*\.vflset\/[\w-]+\.js/.exec(html);
+        const m = PLAYER_PATH.exec(html);
         if (m) {
             found.add(m[0]);
         }
@@ -90,6 +92,8 @@ async function latestSolver() {
     const headers = process.env.GITHUB_TOKEN ? { Authorization: 'Bearer ' + process.env.GITHUB_TOKEN } : {};
     return (await (await get('https://api.github.com/repos/yt-dlp/ejs/releases/latest', { headers })).json()).tag_name;
 }
+
+const PLAYER_PATH = /\/s\/player\/[\w-]+\/tv-player[\w-]*\.vflset\/[\w-]+\.js/;
 
 /** Where a player script's code goes: players/<id>/<name>.js */
 function fileOf(playerPath) {
@@ -203,6 +207,8 @@ async function main() {
     let tag;
     try {
         [paths, tag] = await Promise.all([players(), latestSolver()]);
+        const found = (process.env.FOUND || '').split(',').filter((p) => new RegExp('^' + PLAYER_PATH.source + '$').test(p));
+        paths = [...new Set(paths.concat(found))];
     } catch (e) {
         // Most often a passing network failure: the next run asks again
         console.log('::warning::Could not check: ' + e.message);
@@ -215,7 +221,7 @@ async function main() {
         return force || !(done && done.solver === tag) && !(failed && failed.solver === tag && now - Date.parse(failed.at) < RETRY_MS);
     });
     if (process.env.GITHUB_OUTPUT) {
-        fs.appendFileSync(process.env.GITHUB_OUTPUT, 'todo=' + (todo.length ? 'yes' : '') + '\n');
+        fs.appendFileSync(process.env.GITHUB_OUTPUT, 'todo=' + (todo.length ? 'yes' : '') + '\nfound=' + paths.join(',') + '\n');
     }
     if (!todo.length) {
         console.log('Nothing to do: ' + paths.join(', ') + ' with ' + tag);

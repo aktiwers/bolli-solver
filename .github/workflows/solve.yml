@@ -36,6 +36,8 @@ jobs:
       - name: Prepare
         id: prepare
         if: steps.check.outputs.todo == 'yes'
+        env:
+          FOUND: ${{ steps.check.outputs.found }}
         run: npm ci --no-audit --no-fund && npm run solve -- $FORCE
       # Also after a failed preparation: state.json notes it, so the next runs wait for a change
       - name: Publish
