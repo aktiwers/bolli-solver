@@ -1,0 +1,15 @@
+{
+  "name": "bolli-solver",
+  "private": true,
+  "description": "The n code yt-dlp's solver makes for each YouTube TV player script, in JavaScript old TVs run",
+  "license": "Unlicense",
+  "type": "module",
+  "scripts": {
+    "solve": "node --max-http-header-size=131072 solve.mjs"
+  },
+  "devDependencies": {
+    "@babel/core": "7.28.5",
+    "@babel/preset-env": "7.28.5",
+    "acorn": "8.15.0"
+  }
+}

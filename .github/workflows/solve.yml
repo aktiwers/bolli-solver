@@ -1,0 +1,55 @@
+# Every 5 minutes: a quick check of YouTube's TV player script and yt-dlp's solver release (no packages installed);
+# only when one changed, the solver runs and what it made is committed
+name: Solve
+
+on:
+  schedule:
+    - cron: '*/5 * * * *'
+  workflow_dispatch:
+    inputs:
+      force:
+        description: Prepare again even if nothing changed
+        type: boolean
+        default: false
+
+permissions:
+  contents: write
+
+concurrency:
+  group: solve
+
+jobs:
+  solve:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    env:
+      GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+      FORCE: ${{ inputs.force && '--force' || '' }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24
+      - name: Check
+        id: check
+        run: node --max-http-header-size=131072 solve.mjs --check $FORCE
+      - name: Prepare
+        id: prepare
+        if: steps.check.outputs.todo == 'yes'
+        run: npm ci --no-audit --no-fund && npm run solve -- $FORCE
+      # Also after a failed preparation: state.json notes it, so the next runs wait for a change
+      - name: Publish
+        if: always() && steps.check.outputs.todo == 'yes'
+        env:
+          SUMMARY: ${{ steps.prepare.outputs.summary }}
+        run: |
+          git add -A players state.json
+          if git diff --cached --quiet; then exit 0; fi
+          changed=$(git diff --cached --name-only --diff-filter=AM -- players)
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          git commit -q -m "${SUMMARY:-Prepared}"
+          git pull -q --rebase
+          git push -q
+          # The CDN fetches new files at once instead of answering from its cache
+          for f in $changed; do curl -fsS -o /dev/null "https://purge.jsdelivr.net/gh/${GITHUB_REPOSITORY}@main/$f" || true; done
