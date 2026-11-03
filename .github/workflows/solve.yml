@@ -1,10 +1,10 @@
-# Every 5 minutes: a quick check of YouTube's TV player script and yt-dlp's solver release (no packages installed);
-# only when one changed, the solver runs and what it made is committed
+# Hourly (off the hour's start, when GitHub is busiest): a quick check of YouTube's TV player script and yt-dlp's
+# solver release (no packages installed); only when one changed, the solver runs and what it made is committed
 name: Solve
 
 on:
   schedule:
-    - cron: '*/5 * * * *'
+    - cron: '17 * * * *'
   workflow_dispatch:
     inputs:
       force:
