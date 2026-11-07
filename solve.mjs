@@ -67,17 +67,43 @@ function output(name, value) {
     }
 }
 
-/** The player scripts YouTube's TV page loads (their paths) */
+/** The player scripts YouTube's TV app may run (their paths): the one its TV page names, the one its TV config's
+ * living-room player names, and each build's tcl variant where there is one (since November 2026 YouTube's TV app
+ * often runs that variant, which its TV page does not name) */
 async function players() {
     const found = await Promise.all(AGENTS.map(async (agent) => {
         const html = await (await get('https://www.youtube.com/tv', { headers: { 'User-Agent': agent } })).text();
-        return (PLAYER_PATH.exec(html) || [])[0];
+        return [(PLAYER_PATH.exec(html) || [])[0], await configured(agent)];
     }));
-    const paths = [...new Set(found.filter(Boolean))];
+    const paths = [...new Set(found.flat().filter(Boolean))];
+    for (const p of [...paths]) {
+        const tcl = p.replace(/\/tv-player-ias\.vflset\/tv-player-ias\.js$/, '/tv-player-ias-tcl.vflset/tv-player-ias-tcl.js');
+        if (tcl !== p && !paths.includes(tcl) && await exists('https://www.youtube.com' + tcl)) {
+            paths.push(tcl);
+        }
+    }
     if (!paths.length) {
         throw new Error('YouTube\'s TV page names no TV player script');
     }
     return paths;
+}
+
+/** The player script YouTube's TV config names for its living-room player (asked as YouTube's TV app asks it at each
+ * start), if any */
+async function configured(agent) {
+    try {
+        const text = await (await get('https://www.youtube.com/tv_config?action_get_config=true&client=lb4&theme=cl', { headers: { 'User-Agent': agent } })).text();
+        const config = JSON.parse(text.replace(/^\)\]\}'\s*/, ''));
+        const watch = config.webPlayerContextConfig && config.webPlayerContextConfig.WEB_PLAYER_CONTEXT_CONFIG_ID_LIVING_ROOM_WATCH;
+        return watch && WHOLE_PATH.test(watch.jsUrl || '') ? watch.jsUrl : undefined;
+    } catch (e) {
+        return undefined;
+    }
+}
+
+/** Whether YouTube has a file at url */
+async function exists(url) {
+    return fetch(url, { method: 'HEAD' }).then((r) => r.ok, () => false);
 }
 
 /** yt-dlp's latest solver release */
