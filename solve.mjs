@@ -7,7 +7,8 @@
 // already. Else it runs the solver as it is (here, in Node), takes the n code it adds to the player script, turns that
 // into ES5 (Babel, plus polyfills.js) and checks it before writing it: it parses as ES5, and in the player script, run
 // as a TV's worker would (for a player script made for old TVs, an old TV's: without the built-ins Chrome 38 lacks by
-// MDN's browser data), it gives the solver's own answers. A failure is noted in state.json and fails the run once; that
+// MDN's browser data), it gives the solver's own answers. A failure is noted in state.json and fails the run once (the
+// tcl variant's only warns while the solver cannot do it); that
 // script is tried again with the next solver release (or --force). Network failures only warn: the next run tries again.
 //
 //   npm run solve                 check, and prepare what changed
@@ -35,6 +36,8 @@ const AGENTS = [
 /** A TV player script as YouTube's TV page names it: /s/player/<id>/tv-player….vflset/<name>.js */
 const PLAYER_PATH = /\/s\/player\/([\w-]+)\/tv-player[\w-]*\.vflset\/([\w-]+)\.js/;
 const WHOLE_PATH = new RegExp('^' + PLAYER_PATH.source + '$');
+/** The tcl variant of a build's script (YouTube's TV app runs it since November 2026; its TV page does not name it) */
+const TCL = /\/tv-player-ias-tcl\.vflset\//;
 /** n values the converted code must answer as the solver does */
 const CHALLENGES = ['abcdefghijklmnopqrst', 'zyxwvutsrqponmlkjihg', 'Q2xpY2tCYWl0X1Rlc3Q', 'r2D2-c3P0_bb8xy', 'AAAAAAAAAAAAAAAAAAAA'];
 /** Where the code goes in the player script: before its closure's end */
@@ -288,8 +291,14 @@ async function main() {
             }
             const error = String(e.message || e).slice(0, 500);
             state.players[p] = { solver: tag, at: new Date().toISOString(), error };
-            failures.push(p + ': ' + error);
             told.push(fileOf(p) + ' failed');
+            // The tcl variant only warns while yt-dlp's solver cannot do it (github.com/yt-dlp/ejs/issues/77): it comes
+            // with nearly every new build, and Bolli YouTube plays as a guest meanwhile
+            if (TCL.test(p)) {
+                console.log('::warning::' + p + ': ' + error);
+            } else {
+                failures.push(p + ': ' + error);
+            }
         }
     }
     output('summary', told.join(', ') + ' (solver ' + tag + ')');
