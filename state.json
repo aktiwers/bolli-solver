@@ -38,6 +38,15 @@
       "solver": "0.8.0",
       "at": "2026-11-10T04:38:26.143Z",
       "error": "the solver found no n transform: no solutions: "
+    },
+    "/s/player/958a9d9b/tv-player-ias.vflset/tv-player-ias.js": {
+      "solver": "0.8.0",
+      "at": "2026-11-10T13:29:23.219Z"
+    },
+    "/s/player/958a9d9b/tv-player-ias-tcl.vflset/tv-player-ias-tcl.js": {
+      "solver": "0.8.0",
+      "at": "2026-11-10T13:29:23.975Z",
+      "error": "the solver found no n transform: no solutions: "
     }
   }
 }
