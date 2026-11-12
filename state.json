@@ -47,6 +47,24 @@
       "solver": "0.8.0",
       "at": "2026-11-10T13:29:23.975Z",
       "error": "the solver found no n transform: no solutions: "
+    },
+    "/s/player/fad7e4e9/tv-player-ias.vflset/tv-player-ias.js": {
+      "solver": "0.8.0",
+      "at": "2026-11-12T20:50:03.746Z"
+    },
+    "/s/player/fad7e4e9/tv-player-ias-tcl.vflset/tv-player-ias-tcl.js": {
+      "solver": "0.8.0",
+      "at": "2026-11-12T20:50:04.362Z",
+      "error": "the solver found no n transform: no solutions: "
+    },
+    "/s/player/3935094d/tv-player-ias.vflset/tv-player-ias.js": {
+      "solver": "0.8.0",
+      "at": "2026-11-12T20:50:05.329Z"
+    },
+    "/s/player/3935094d/tv-player-ias-tcl.vflset/tv-player-ias-tcl.js": {
+      "solver": "0.8.0",
+      "at": "2026-11-12T20:50:06.065Z",
+      "error": "the solver found no n transform: no solutions: "
     }
   }
 }
